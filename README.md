@@ -1,91 +1,59 @@
-# Nova Auction Protocol
+# NovaAuctionProtocol
 
-![banner](./assets/banner.png)
+![NovaAuctionProtocol — Solguard Labs](assets/banner.png)
 
-NovaAuctionProtocol es una implementación EVM de subastas de liquidación para
-collateral incautado. El protocolo permite vender collateral a cambio de deuda
-estable mediante pujas competitivas, con extensión anti-sniping cuando una puja
-llega cerca del cierre.
+NovaAuctionProtocol modela subastas EVM de colateral liquidado contra deuda estable nUSD. El motor separa vault, evaluación de riesgo, inicio de subasta, pujas, liquidación de deuda en tesorería y reclamación del colateral. Incluye gobierno parametrizable, pausas, vistas de consulta y analítica de recuperación.
 
-La arquitectura separa vaults, motor de liquidación, pricing de subastas,
-tesorería, rewards de keepers, vistas agregadas y controles de seguridad.
+> Esta distribución se ejecuta en Foundry y redes locales de prueba. La rama `production` y el release identifican una revisión del código; no representan un despliegue on-chain ni autorizan gestionar activos reales.
 
-## Componentes
+## Arquitectura
 
-```text
-src/
-  core/                 Vault, liquidation engine y auction house
-  governance/           Configuración, roles y timelock auxiliar
-  interfaces/           Interfaces públicas del protocolo
-  lens/                 Vistas agregadas y analytics de subastas
-  libraries/            Tipos, matemáticas, pricing y helpers de estado
-  oracle/               Oráculo de precios
-  periphery/            Router y batch actions
-  rewards/              Créditos de keepers
-  risk/                 Motor de consultas de riesgo
-  security/             Ownable2Step, pausable y reentrancy guard
-  tokens/               nUSD y collateral ERC20
-  treasury/             Accounting de settlement, surplus y shortfall
+```mermaid
+flowchart LR
+    O[Oráculo] --> R[Motor de riesgo]
+    V[Vault de posiciones] --> R
+    R --> L[Motor de liquidación]
+    L --> A[Casa de subastas]
+    B[Pujadores] --> A
+    A --> T[Tesorería nUSD]
+    A --> C[Reclamación de colateral]
+    A --> X[Lens y analítica]
+    G[Configurador y timelock] --> R
+    G --> A
 ```
 
-## Flujo principal
+`src/core` contiene vault, liquidación y casa de subastas; `src/libraries` concentra cálculos y tipos; `src/treasury` registra recuperación, superávit y déficit; `src/lens` publica vistas de estado y un perfil informativo de recuperación bajo estrés. `src/security` contiene controles de acceso, pausa y reentrada.
 
-1. Un borrower deposita collateral y abre deuda estable.
-2. Si su health factor cae por debajo del umbral configurado, el liquidation
-   engine incauta collateral.
-3. El auction house inicia una subasta por un `debtTarget`.
-4. Los bidders compiten con bids en nUSD.
-5. Una puja cerca del cierre extiende `endTime`.
-6. Al finalizar, `settle` transfiere la deuda ganadora a treasury.
-7. El ganador llama `claimCollateral` y recibe el collateral adjudicado.
+## Uso local
 
-## Seguridad y controles
-
-- Roles separados para gobierno, liquidación, pausa y configuración.
-- Pricing de subasta aislado en librerías dedicadas.
-- Extensión anti-sniping parametrizada por ventana y duración.
-- Settlement separado de claim de collateral.
-- Accounting de treasury para surplus, shortfall y recuperación.
-- Vistas de riesgo y analytics para keepers e integradores.
-
-Consulta [SECURITY.md](./SECURITY.md) para el alcance de revisión, las
-invariantes esperadas y el proceso de reporte responsable.
-
-## Requisitos
-
-- Foundry con `forge`, `cast` y `anvil`.
-- Git si se quiere reinstalar `forge-std`.
-- Bash para los scripts auxiliares.
-
-## Instalación
+Requiere Foundry con `forge` y Git para instalar `forge-std`.
 
 ```bash
 bash scripts/bootstrap.sh
+forge fmt --check
 forge build
-```
-
-## Pruebas
-
-```bash
 forge test
-forge test -vvv
+bash scripts/ci.sh
 ```
 
-La suite cubre:
+El script `script/DeployNova.s.sol` sirve como ejemplo de composición de contratos en un entorno local. No se proporcionan direcciones de red pública ni parámetros para transferir fondos reales.
 
-- `startAuction`;
-- `bid`;
-- extensión anti-sniping;
-- `settle`;
-- `cancel`;
-- `claimCollateral`;
-- accounting de treasury y rewards de keepers.
+## Ciclo económico
 
-## LOC
+1. Una posición de deuda se evalúa con el oráculo y la configuración de riesgo.
+2. El motor de liquidación inicia una subasta con colateral bloqueado y `debtTarget`.
+3. Los participantes pujan en nUSD mientras la subasta está activa. Las pujas próximas al cierre pueden ampliar su ventana según la configuración.
+4. Al terminar, `settle` registra el importe ganador en tesorería y crea el derecho de reclamación del colateral.
+5. El ganador reclama el colateral; los créditos de pujas superadas son recuperables por sus titulares.
 
-El repositorio incluye un verificador de tamaño para mantener `src/` dentro del
-rango operativo definido:
+La configuración inicial usa duración de 6 horas, ventana de extensión de 15 minutos, extensión de 30 minutos, incremento mínimo del 5 % y pisos de 100 % y 80 % de la deuda objetivo. Los parámetros pueden cambiar mediante el configurador con control de acceso. La analítica de recuperación toma un importe nominal limitado por la deuda objetivo y muestra además una proyección con recorte del 15 %; no afecta a las pujas ni al settlement.
 
-```bash
-bash scripts/check-loc.sh
-```
+## Documentación
+
+- [Arquitectura y estados](docs/arquitectura.md)
+- [Modelo económico](docs/modelo-economico.md)
+- [Integración y operación](docs/integracion-operacion.md)
+- [Política de seguridad](SECURITY.md)
+- [Historial de cambios](CHANGELOG.md)
+
+El CI ejecuta formato, compilación, tests Forge y un recuento informativo de líneas. Tras publicación, `main`, `production` y el tag anotado `v1.0.0` deben resolver al mismo commit.

@@ -18,7 +18,6 @@ abstract contract NovaTestBase is Test {
     address internal borrower = address(0xB0B);
     address internal alice = address(0xA11CE);
     address internal bob = address(0xB0B2);
-    address internal attacker = address(0xA77A);
     address internal recipient = address(0xCAFE);
 
     NovaConfigurator internal configurator;
