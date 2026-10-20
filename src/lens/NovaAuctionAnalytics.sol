@@ -10,6 +10,10 @@ import { NovaTypes } from "../libraries/NovaTypes.sol";
 contract NovaAuctionAnalytics {
     using NovaMath for uint256;
 
+    uint256 internal constant STRESS_HAIRCUT_BPS = 1500;
+
+    error AuctionNotFound(uint256 auctionId);
+
     struct AuctionAggregate {
         uint256 scanned;
         uint256 activeCount;
@@ -18,9 +22,9 @@ contract NovaAuctionAnalytics {
         uint256 totalDebtTarget;
         uint256 totalWinningBid;
         uint256 totalCollateral;
-        uint256 totalCachedFloor;
-        uint256 totalTrueFloor;
-        uint256 staleFloorCount;
+        uint256 totalDebtRecovered;
+        uint256 totalShortfall;
+        uint256 totalSurplus;
     }
 
     struct ExtensionReport {
@@ -28,8 +32,19 @@ contract NovaAuctionAnalytics {
         uint256 auctionsExtended;
         uint256 totalExtensions;
         uint256 largestExtensionCount;
-        uint256 largestFloorGap;
-        uint256 largestFloorGapAuctionId;
+        uint256 earliestActiveEndTime;
+    }
+
+    struct RecoveryProfile {
+        uint256 auctionId;
+        uint256 debtTarget;
+        uint256 winningBid;
+        uint256 nominalRecovery;
+        uint256 shortfall;
+        uint256 surplus;
+        uint256 stressHaircutBps;
+        uint256 stressedRecovery;
+        uint256 stressedShortfall;
     }
 
     INovaConfigurator public immutable configurator;
@@ -47,7 +62,6 @@ contract NovaAuctionAnalytics {
         uint256 startId,
         uint256 count
     ) external view returns (AuctionAggregate memory data) {
-        NovaTypes.AuctionConfig memory config = configurator.getAuctionConfig();
         for (uint256 i = 0; i < count; i++) {
             NovaTypes.Auction memory auction = auctionHouse.getAuction(startId + i);
             if (auction.id == 0) continue;
@@ -58,10 +72,9 @@ contract NovaAuctionAnalytics {
             data.totalDebtTarget += auction.debtTarget;
             data.totalWinningBid += auction.winningBid;
             data.totalCollateral += auction.collateralAmount;
-            data.totalCachedFloor += auction.cachedFloorDebt;
-            uint256 trueFloor = AuctionPricing.floorDebt(auction, config, block.timestamp);
-            data.totalTrueFloor += trueFloor;
-            if (trueFloor > auction.cachedFloorDebt) data.staleFloorCount += 1;
+            data.totalDebtRecovered += NovaMath.min(auction.winningBid, auction.debtTarget);
+            data.totalShortfall += AuctionPricing.shortfall(auction.winningBid, auction.debtTarget);
+            data.totalSurplus += AuctionPricing.surplus(auction.winningBid, auction.debtTarget);
         }
     }
 
@@ -69,7 +82,6 @@ contract NovaAuctionAnalytics {
         uint256 startId,
         uint256 count
     ) external view returns (ExtensionReport memory report) {
-        NovaTypes.AuctionConfig memory config = configurator.getAuctionConfig();
         for (uint256 i = 0; i < count; i++) {
             NovaTypes.Auction memory auction = auctionHouse.getAuction(startId + i);
             if (auction.id == 0) continue;
@@ -81,42 +93,49 @@ contract NovaAuctionAnalytics {
                     report.largestExtensionCount = auction.extensionCount;
                 }
             }
-            uint256 trueFloor = AuctionPricing.floorDebt(auction, config, block.timestamp);
-            uint256 gap =
-                trueFloor > auction.cachedFloorDebt ? trueFloor - auction.cachedFloorDebt : 0;
-            if (gap > report.largestFloorGap) {
-                report.largestFloorGap = gap;
-                report.largestFloorGapAuctionId = auction.id;
+            if (
+                auction.status == NovaTypes.AuctionStatus.Active
+                    && (report.earliestActiveEndTime == 0
+                        || auction.endTime < report.earliestActiveEndTime)
+            ) {
+                report.earliestActiveEndTime = auction.endTime;
             }
         }
     }
 
-    function staleFloorGap(
+    function recoveryProfile(
         uint256 auctionId
-    ) external view returns (uint256 gap, uint256 cachedFloor, uint256 trueFloor) {
+    ) external view returns (RecoveryProfile memory profile) {
         NovaTypes.Auction memory auction = auctionHouse.getAuction(auctionId);
-        cachedFloor = auction.cachedFloorDebt;
-        trueFloor =
-            AuctionPricing.floorDebt(auction, configurator.getAuctionConfig(), block.timestamp);
-        gap = trueFloor > cachedFloor ? trueFloor - cachedFloor : 0;
+        if (auction.id == 0) revert AuctionNotFound(auctionId);
+        uint256 recovered = NovaMath.min(auction.winningBid, auction.debtTarget);
+        uint256 stressed = recovered.mulDivDown(NovaMath.BPS - STRESS_HAIRCUT_BPS, NovaMath.BPS);
+        profile = RecoveryProfile({
+            auctionId: auctionId,
+            debtTarget: auction.debtTarget,
+            winningBid: auction.winningBid,
+            nominalRecovery: recovered,
+            shortfall: AuctionPricing.shortfall(auction.winningBid, auction.debtTarget),
+            surplus: AuctionPricing.surplus(auction.winningBid, auction.debtTarget),
+            stressHaircutBps: STRESS_HAIRCUT_BPS,
+            stressedRecovery: stressed,
+            stressedShortfall: auction.debtTarget - stressed
+        });
     }
 
-    function weightedAverageDiscount(
+    function weightedRecoveryBps(
         uint256 startId,
         uint256 count
-    ) external view returns (uint256 discountBps) {
-        uint256 weightedGap;
-        uint256 weightedBase;
-        NovaTypes.AuctionConfig memory config = configurator.getAuctionConfig();
+    ) external view returns (uint256) {
+        uint256 totalDebt;
+        uint256 totalRecovery;
         for (uint256 i = 0; i < count; i++) {
             NovaTypes.Auction memory auction = auctionHouse.getAuction(startId + i);
-            if (auction.id == 0 || auction.winningBid == 0) continue;
-            uint256 trueFloor = AuctionPricing.floorDebt(auction, config, block.timestamp);
-            if (trueFloor <= auction.winningBid) continue;
-            weightedGap += trueFloor - auction.winningBid;
-            weightedBase += trueFloor;
+            if (auction.id == 0) continue;
+            totalDebt += auction.debtTarget;
+            totalRecovery += NovaMath.min(auction.winningBid, auction.debtTarget);
         }
-        if (weightedBase == 0) return 0;
-        discountBps = weightedGap.mulDivDown(NovaMath.BPS, weightedBase);
+        if (totalDebt == 0) return 0;
+        return totalRecovery.mulDivDown(NovaMath.BPS, totalDebt);
     }
 }

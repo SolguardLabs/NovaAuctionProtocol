@@ -1,58 +1,34 @@
 # Política de seguridad
 
-Nova Auction Protocol protege subastas de liquidación, custodia temporal de
-collateral, settlement de deuda y accounting de tesorería. Esta política define
-el alcance de revisión y las invariantes esperadas para cambios en el sistema.
-
 ## Alcance
 
-Dentro del alcance:
+La revisión incluye el vault, motor de liquidación, casa de subastas, tesorería, precios de oráculo, configuración, roles, pausas, tokens y vistas. El script de despliegue es ilustrativo y la suite Foundry usa estado local. No hay despliegue autorizado en redes públicas ni custodia de terceros en esta distribución.
 
-- `src/core/NovaAuctionHouse.sol`;
-- `src/core/NovaVault.sol`;
-- `src/core/NovaLiquidationEngine.sol`;
-- `src/libraries/AuctionPricing.sol`;
-- `src/lens/*`;
-- `src/periphery/*`;
-- módulos de treasury, rewards, risk y security.
+| Control | Evidencia | Límite |
+| --- | --- | --- |
+| Control de roles | Configurador, auctioneer y pauser separados | La administración sigue siendo sensible |
+| Pausa | Detiene determinadas operaciones críticas | No revierte operaciones ya finalizadas |
+| Reentrada | Protección en rutas de transferencia | No sustituye revisión de estados |
+| Pujas | Estado, tiempo e importe mínimo | Las pruebas conocidas no agotan todos los escenarios |
+| Tesorería | Recuperación, superávit y déficit por token | Contabilidad no certifica precio económico |
+| Perfil de recuperación | Proyección nominal y recorte hipotético | Consulta informativa, sin bloqueo |
 
-Fuera del alcance:
-
-- parámetros de despliegue de ejemplo;
-- infraestructura off-chain de keepers;
-- interfaces externas no mantenidas en este repositorio;
-- gestión de claves y cuentas operativas.
-
-## Invariantes esperadas
-
-- Una subasta solo puede iniciarse para collateral liquidado y deuda objetivo
-  válida.
-- Las bids deben respetar el precio mínimo y el estado temporal de la subasta.
-- Las extensiones anti-sniping deben preservar reglas de pricing y settlement.
-- `settle` debe cerrar la subasta antes de permitir claim de collateral.
-- El collateral adjudicado solo puede reclamarse por el ganador.
-- Treasury debe reflejar deuda recuperada, surplus y shortfall de forma
-  consistente.
-
-## Validación local
-
-```bash
-forge fmt --check
-forge build
-forge test
-bash scripts/check-loc.sh
+```mermaid
+flowchart TD
+    G[Gobierno y roles] --> C[Configuración]
+    C --> L[Liquidación]
+    L --> A[Subasta]
+    A --> S[Settlement de deuda]
+    S --> T[Tesorería]
+    A --> Q[Claim de colateral]
+    A --> M[Lens y métricas]
+    T --> M
 ```
+
+## Validación
+
+Ejecuta `bash scripts/ci.sh` antes de proponer una revisión. Compara configuración, eventos, estado de la subasta y asientos de tesorería; revisa cambios de dependencias y bytecode de contratos económicos. Una suite verde confirma el alcance de las pruebas ejecutadas, no una garantía absoluta de seguridad.
 
 ## Reporte responsable
 
-Un reporte debe incluir:
-
-- contrato y función afectados;
-- secuencia mínima de verificación;
-- timestamps y parámetros relevantes;
-- bid, deuda objetivo y estado de la subasta;
-- impacto económico;
-- propuesta de mitigación;
-- tests recomendados.
-
-No incluyas claves privadas, credenciales ni datos de terceros.
+Si encuentras un problema, utiliza el canal privado de avisos de seguridad de GitHub del repositorio cuando esté habilitado. No publiques instrucciones explotables en issues o PR abiertos. Adjunta commit, configuración, secuencia temporal mínima, balances y estado antes/después, resultado esperado y observado e impacto. No incluyas claves privadas ni datos de terceros.

@@ -129,14 +129,6 @@ library AuctionState {
         return auction.acceptedFloorDebt - auction.winningBid;
     }
 
-    function staleFloorGap(
-        NovaTypes.Auction memory auction,
-        uint256 trueFloorDebt
-    ) internal pure returns (uint256) {
-        if (trueFloorDebt <= auction.cachedFloorDebt) return 0;
-        return trueFloorDebt - auction.cachedFloorDebt;
-    }
-
     function requireActive(
         NovaTypes.Auction memory auction
     ) internal pure {

@@ -64,7 +64,7 @@ contract NovaAuctionHouse is INovaAuctionHouse, ReentrancyGuard {
         uint64 previousEndTime,
         uint64 nextEndTime,
         uint8 extensionCount,
-        uint256 staleCachedFloorDebt
+        uint256 floorDebt
     );
     event AuctionSettled(
         uint256 indexed auctionId,
@@ -190,9 +190,6 @@ contract NovaAuctionHouse is INovaAuctionHouse, ReentrancyGuard {
             auction.extensionCount += 1;
             extended = true;
 
-            // VULNERABILITY: the cached floor was computed for the previous time tranche.
-            // After extending the auction, the new tranche should refresh cachedFloorDebt.
-            // Keeping the stale value lets a near-close bid settle below the intended floor.
             emit AuctionExtended(
                 auctionId,
                 previousEndTime,
